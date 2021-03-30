@@ -749,6 +749,7 @@ func persistBackup(backup *pkgbackup.Request,
 		CSIVolumeSnapshotContents: csiSnapshotContentsJSON,
 	}
 	//!!!!TODO Here we shall put a hook to copy all the files from tempdir to a PV volume
+	//Using backupInfo object to persist
 	if err := backupStore.PutBackup(backupInfo); err != nil {
 		persistErrs = append(persistErrs, err)
 	}
