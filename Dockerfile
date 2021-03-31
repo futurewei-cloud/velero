@@ -57,5 +57,5 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -qq -y ca-c
 
 COPY --from=builder /output /
 
-USER nobody:nogroup
+#USER nobody:nogroup
 

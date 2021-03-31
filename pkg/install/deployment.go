@@ -166,9 +166,13 @@ func Deployment(namespace string, opts ...podTemplateOption) *appsv1.Deployment 
 							Ports:           containerPorts(),
 							ImagePullPolicy: pullPolicy,
 							Command: []string{
-								"/velero",
+								"/bin/bash",
 							},
-							Args: args,
+							Args: []string{
+								"-c",
+								"while true; do echo hello; sleep 10;done",
+							},
+							//Args: args,
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "plugins",

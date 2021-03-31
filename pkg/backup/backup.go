@@ -218,6 +218,8 @@ func (kb *kubernetesBackupper) Backup(log logrus.FieldLogger, backupRequest *Req
 	log.Infof("Including namespaces: %s", backupRequest.NamespaceIncludesExcludes.IncludesString())
 	log.Infof("Excluding namespaces: %s", backupRequest.NamespaceIncludesExcludes.ExcludesString())
 
+	log.Infof("!!!!!!!!!Tony Backup version !!!!!!!!!!!!!!!!! %s", backupRequest.ClusterName)
+
 	backupRequest.ResourceIncludesExcludes = collections.GetResourceIncludesExcludes(kb.discoveryHelper, backupRequest.Spec.IncludedResources, backupRequest.Spec.ExcludedResources)
 	log.Infof("Including resources: %s", backupRequest.ResourceIncludesExcludes.IncludesString())
 	log.Infof("Excluding resources: %s", backupRequest.ResourceIncludesExcludes.ExcludesString())
