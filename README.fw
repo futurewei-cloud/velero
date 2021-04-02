@@ -1,0 +1,21 @@
+Develop and test procedure:
+
+1. Compile:  'make local' on one of the velero k8s node is most convenient, and guarantees compatibility
+Binary file location: _output/bin/linux/amd64/velero
+
+2. Copy to the instance: (using old velero cluster as example)
+Find the pod to work with:
+# kubectl -n velero get pod | grep ^velero
+velero-64d5dfc894-7wgtx   1/1     Running   0          131m
+
+#kubectl -n velero cp _output/bin/linux/amd64/velero velero-64d5dfc894-7wgtx:/velero.bin
+
+3. Start the service:
+# kubectl -n velero exec -it pod/velero-64d5dfc894-7wgtx -- /bin/bash
+./velero server --features=
+
+Keep this window to watch output from console
+
+4. Kick off a backup operation: (run from velero1)
+# _output/bin/linux/amd64/velero backup create lili-backup5 --include-namespaces=vtest
+
