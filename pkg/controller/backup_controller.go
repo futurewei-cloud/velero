@@ -26,6 +26,7 @@ import (
 	"io/ioutil"
 	"os"
 	"time"
+	"path"
 
 	jsonpatch "github.com/evanphx/json-patch"
 	"github.com/pkg/errors"
@@ -748,10 +749,20 @@ func persistBackup(backup *pkgbackup.Request,
 		CSIVolumeSnapshots:        csiSnapshotJSON,
 		CSIVolumeSnapshotContents: csiSnapshotContentsJSON,
 	}
+
 	//!!!!TODO Here we shall put a hook to copy all the files from tempdir to a PV volume
 	//Using backupInfo object to persist
+	backuppv := "/lilipv"
+	if err := PutBackupToPV(backuppv, backupInfo); err != nil {
+	   persistErrs = append(persistErrs, err)
+	   log.WithError(err).WithField("backuppv", backuppv).Error("!!!!!!!!!!!!Errr!!!") 
+	}
+
+        log.Info("!!!!!!!!!!!!NO  Errr!!!")
+
 	if err := backupStore.PutBackup(backupInfo); err != nil {
 		persistErrs = append(persistErrs, err)
+                log.WithError(err).Error("!!!!!!!!!!!!Errr!!!")
 	}
 
 	return persistErrs
@@ -792,3 +803,104 @@ func encodeToJSONGzip(data interface{}, desc string) (*bytes.Buffer, []error) {
 
 	return buf, nil
 }
+
+func seekToBeginning(r io.Reader) error {
+    seeker, ok := r.(io.Seeker)
+    if !ok {
+        return nil
+    }
+
+    _, err := seeker.Seek(0, 0)
+    return err
+}
+
+// Path returns a path on disk where the secret key defined by
+// the given selector is serialized.
+func persistToPV(dir string, name string, content io.Reader) error {
+
+    filePath := fmt.Sprintf("%s/%s", dir, name)
+
+    file, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, 0644)
+    if err != nil {
+        return errors.Wrap(err, "unable to open file for writing")
+    }
+
+    if err := seekToBeginning(content); err != nil {
+        return errors.WithStack(err)
+    }
+
+    if _, err := io.Copy(file, content); err != nil {
+    	return errors.Wrap(err, "unable to write to store")
+    }
+
+    if err := file.Close(); err != nil {
+        return errors.Wrap(err, "unable to close file")
+    }
+
+    return nil
+}
+
+func PutBackupToPV(prefix string, info persistence.BackupInfo) error {
+
+    if _, err := os.Stat(prefix); err != nil {
+        // The path may not exist
+        return nil
+    }
+    //lilipv/lilibackup/
+    dir := path.Join(prefix, info.Name)
+    
+    if err := os.Mkdir(dir, 0755); err != nil {
+        return err
+    }
+
+    if err := persistToPV(dir, fmt.Sprintf("%s-logs.gz", info.Name), info.Log); err != nil {
+        // Uploading the log file is best-effort; if it fails, we log the error but it doesn't impact the
+        // backup's status.
+        return err
+    }
+
+    if info.Metadata == nil {
+        // If we don't have metadata, something failed, and there's no point in continuing. An object
+        // storage bucket that is missing the metadata file can't be restored, nor can its logs be
+        // viewed.
+        return nil
+    }
+
+    if err := persistToPV(dir, "velero-backup.json", info.Metadata); err != nil {
+        // failure to upload metadata file is a hard-stop
+        return err
+    }
+
+    if err := persistToPV(dir, fmt.Sprintf("%s.tar.gz", info.Name), info.Contents); err != nil {
+        //deleteErr := s.objectStore.DeleteObject(s.bucket, s.layout.getBackupMetadataKey(info.Name))
+        //return kerrors.NewAggregate([]error{err, deleteErr})
+	return err
+    }
+
+    // Since the logic for all of these files is the exact same except for the name and the contents,
+    // use a map literal to iterate through them and write them to the bucket.
+    var backupObjs = map[string]io.Reader{
+        fmt.Sprintf("%s-podvolumebackups.json.gz", info.Name):          info.PodVolumeBackups,
+        fmt.Sprintf("%s-volumesnapshots.json.gz", info.Name):           info.VolumeSnapshots,
+        fmt.Sprintf("%s-resource-list.json.gz", info.Name):             info.BackupResourceList,
+        fmt.Sprintf("%s-csi-volumesnapshots.json.gz", info.Name):       info.CSIVolumeSnapshots,
+        fmt.Sprintf("%s-csi-volumesnapshotcontents.json.gz", info.Name): info.CSIVolumeSnapshotContents,
+    }
+
+    for key, reader := range backupObjs {
+        if err := persistToPV(dir, key, reader); err != nil {
+            errs := []error{err}
+
+            // attempt to clean up the backup contents and metadata if we fail to upload and of the extra files.
+            //deleteErr := s.objectStore.DeleteObject(s.bucket, s.layout.getBackupContentsKey(info.Name))
+            //errs = append(errs, deleteErr)
+
+            //deleteErr = s.objectStore.DeleteObject(s.bucket, s.layout.getBackupMetadataKey(info.Name))
+            //errs = append(errs, deleteErr)
+            return kerrors.NewAggregate(errs)
+        }
+    }
+
+    return nil
+}
+
