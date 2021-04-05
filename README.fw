@@ -1,5 +1,18 @@
 Develop and test procedure:
 
+====================== velero full image build on a k8s node ================================
+
+Since the k8s firewall rules will interfere with docker continaer, you will have trouble 
+download external resources when building on one of those k8s node by running "make" in velero.
+To fix the issue, apply a iptables patch:
+
+mkdir -p /devhub;mount -t nfs 10.124.48.100:/share /devhub
+iptables-restore < /devhub/fksdr/iptables-k8s
+
+No reboot is required, make should work immediately.
+
+====================== velero binary compile and test ================================
+
 1. Compile:  'make local' on one of the velero k8s node is most convenient, and guarantees compatibility
 Binary file location: _output/bin/linux/amd64/velero
 
@@ -18,4 +31,10 @@ Keep this window to watch output from console
 
 4. Kick off a backup operation: (run from velero1)
 # _output/bin/linux/amd64/velero backup create lili-backup5 --include-namespaces=vtest
+
+====================== deploy velero on k8s ================================
+
+Refer to utility scripts under /devhub/fksdr/velero-deployment/
+
+======================  ================================
 
