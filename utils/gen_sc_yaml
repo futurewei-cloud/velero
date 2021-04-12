@@ -1,0 +1,13 @@
+#!/bin/bash
+
+echo execute this script on a ceph mon noed
+
+FSID="`cat /etc/ceph/ceph.conf | grep fsid | awk '{print $3}'`"
+#echo FSID: $FSID
+
+USERKEY="`cat /etc/ceph/ceph.client.admin.keyring | grep key | awk '{print $3}'`"
+#echo USERKEY: $USERKEY
+
+SECNAME=ceph-csi-rbd-sec
+cat /devhub/fksdr/template/ceph_sc.yaml.template | sed "s/FSID/$FSID/g;s/USERKEY/$USERKEY/g;s/SECNAME/$SECNAME/g" | tee /devhub/fksdr/template/ceph_sc-`hostname`.yaml
+

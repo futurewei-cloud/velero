@@ -1,0 +1,14 @@
+#!/bin/bash
+
+setup_pool()
+{
+   ceph osd pool create data
+   rbd create img1 --size 4096 --image-feature layering -p data
+   # mount:
+   # rbd map img1 --name client.admin -p data
+}
+
+FSID=$(ceph osd dump | grep fsid | awk '{print $2}')
+echo FSID: $FSID
+
+#setup_pool
