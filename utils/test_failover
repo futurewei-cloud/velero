@@ -1,0 +1,145 @@
+#!/bin/bash
+
+CEPHA=ceph3-1
+CEPHB=ceph4-1
+PEER=testk8s-1
+
+TMPDIR=/devhub/fksdr/tmp/$$
+mkdir -p $TMPDIR
+pushd $TMPDIR
+
+PVF=pv-$$.yaml
+PVCF=pvc-$$.yaml
+PODF=pod-$$.yaml
+PVC=pvc-$$
+POD=nginx-$$
+SCF=sc-$$.yaml
+
+
+# 1. set up pod with pvc on primary k8s cluster
+setup_primary()
+{
+cat >$PVCF <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: $PVC
+  namespace: vtest
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: csi-rbd-sc-ceph-data
+EOF
+
+cat>$PODF <<EOF
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: $POD
+  namespace: vtest
+spec:
+  containers:
+    - name: web-server
+      image: nginx
+      volumeMounts:
+        - name: vol$$
+          mountPath: /var/lib/www/html
+  volumes:
+    - name: vol$$
+      persistentVolumeClaim:
+        claimName: $PVC
+        readOnly: false
+EOF
+
+kubectl apply -f $PVCF
+kubectl apply -f $PODF
+sleep 2
+}
+
+setup_primary
+watch kubectl describe pod $POD -n vtest
+
+# 2. kick off replication on primary side ceph
+ssh $CEPHA rbd feature enable data/$VOLID journaling,exclusive-lock
+# replace sleep with some smarter condition check, such as monitor replication progress
+sleep 3
+echo primary site volumes:
+ssh $CEPHA rbd ls data --long
+echo secondary site volumes:
+ssh $CEPHB rbd ls data --long
+
+# 3. Set secondary ceph to primary, disable jornaling and exec-lock
+ssh $CEPHA rbd mirror image demote data/$VOLID
+ssh $CEPHB rbd mirror image promote data/$VOLID
+ssh $CEPHB rbd feature disable data/$VOLID journaling
+ssh $CEPHB rbd feature disable data/$VOLID exclusive-lock
+
+# ==============================================================================================
+#                               Failover starts from here
+# ==============================================================================================
+
+
+# 4. On secondary k8s cluster, perform following actions:
+#  - create PV based on primary side PV spec
+#  - generate StorageClass with same name on old primary side, but secrect from secondary ceph
+#  - create PVC pointing for the PV
+#  - create pod using this PVC
+
+# =================== prepare new PV file and apply ===================
+PVID="`kubectl get pv | grep vtest/$PVC | awk '{print $1}'`"
+kubectl get pv $PVID -o yaml > $PVF
+VOLID="`grep "^  *imageName:" $PVF | awk '{print $2}'`"
+cat $PVF | grep -i -v -e time -e "^  *uid" | sed -n '/^status/q;p' > new_$PVF
+ssh $PEER kubectl apply -f $TMPDIR/$PVF
+
+# =================== prepare new StorageClass and apply ===================
+SEC_NAME="`cat $PVF | grep nodeStageSecretRef: -A 1 | tail -1 | awk '{print $2}'`"
+KEY_B="`ssh $CEPHB cat /etc/ceph/ceph.conf | grep fsid | awk '{print $3}'`"
+FSID_B="`ssh $CEPHB cat /etc/ceph/ceph.client.admin.keyring | grep key | awk '{print $3}'`"
+
+cat >$SCF <<EOF
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: $SEC_NAME
+  namespace: ceph-csi-rbd
+stringData:
+  userID: admin
+  userKey: $KEY_B
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+   name: csi-rbd-sc-ceph-data
+provisioner: rbd.csi.ceph.com
+parameters:
+   clusterID: $FSID_B
+   pool: data
+   imageFeatures: layering
+   csi.storage.k8s.io/provisioner-secret-name: $SEC_NAME
+   csi.storage.k8s.io/provisioner-secret-namespace: ceph-csi-rbd
+   csi.storage.k8s.io/node-stage-secret-name: $SEC_NAME
+   csi.storage.k8s.io/node-stage-secret-namespace: ceph-csi-rbd
+reclaimPolicy: Retain
+mountOptions:
+   - discard
+EOF
+
+ssh $PEER kubectl delete sc csi-rbd-sc-ceph-data
+ssh $PEER kubectl apply -f $TMPDIR/$SCF
+
+# =================== recreate PVC on peer ===================
+ssh $PEER kubectl apply -f $TMPDIR/$PVCF
+
+# =================== recreate POD on peer ===================
+ssh $PEER kubectl apply -f $TMPDIR/$PODF
+
+
+
+popd
+
