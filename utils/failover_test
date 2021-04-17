@@ -1,0 +1,32 @@
+#!/bin/bash
+
+#set -e
+#set -x
+
+. failover_lib
+
+mkdir -p $TMPDIR
+pushd $TMPDIR
+
+echo Test set up unique ID: $$
+echo All generated k8s config files can be found in $TMPDIR
+echo
+
+setup_primary
+watch kubectl get pod -n velero
+
+get_vtest_vol
+
+# 2. kick off replication on primary side ceph
+start_replication
+start_backup
+echo
+echo Hit ENTER when ready to failover
+read ANSWER
+
+
+# ==============================================================================================
+#                               Failover starts from here
+# ==============================================================================================
+
+start_failover

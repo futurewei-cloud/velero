@@ -1,0 +1,70 @@
+#!/bin/bash
+
+. failover_lib
+
+ID=""
+
+if [ $# -ne 1 ];then
+   if [ `ls -1d /devhub/fksdr/tmp/*/ | wc -l` -eq 1 ];then
+      ID="`ls -1d /devhub/fksdr/tmp/*/ | awk -F/ '{print $5}'`"
+   fi
+else
+   ID=$1
+fi
+
+if [ "$ID" = "" ];then
+   echo 'Usage: $0 <test-ID>'
+   echo Available IDs are:
+   ls -1d /devhub/fksdr/tmp/*/ 2>/dev/null | sed "s/^\/devhub\/fksdr\/tmp\///g"
+   exit
+fi
+
+
+#set -e
+#set -x
+
+echo Clean up test with unique ID: $ID
+echo
+
+TMPDIR=/devhub/fksdr/tmp/$ID
+
+rm -rf $TMPDIR
+ssh $PEER rm -rf $TMPDIR
+
+clean_peer()
+{
+PVID="`ssh $PEER kubectl get pv | grep ${1}/ | awk '{print $1}'`"
+PVC="`ssh $PEER kubectl get pv | grep ${1}/ | awk '{print $6}'`"
+VOLID="`ssh $PEER kubectl get pv $PVID -o yaml | grep "^  *imageName:" | awk '{print $2}'`"
+ssh $PEER kubectl delete pvc $PVC -n $1
+}
+
+ssh $PEER kubectl -n velero delete backups.velero.io vbackup-$ID
+clean_peer vtest
+clean_peer velero
+
+ssh $PEER kubectl delete namespace vtest
+ssh $PEER kubectl delete -n velero deployment.apps/velero
+ssh $PEER kubectl delete pvc -n velero pvc-velero
+
+ssh $PEER /devhub/fksdr/cleanup_k8s_pv
+ssh $CEPHB /devhub/fksdr/cleanup_ceph_pv &
+
+clean_local()
+{
+PVID="`kubectl get pv | grep ${1}/ | awk '{print $1}'`"
+PVC="`kubectl get pv | grep ${1}/ | awk '{print $6}'`"
+VOLID="`kubectl get pv $PVID -o yaml | grep "^  *imageName:" | awk '{print $2}'`"
+kubectl delete pvc $PVC -n $1
+sleep 5
+ssh $CEPHA rbd mirror image promote data/$VOLID
+}
+
+clean_local vtest
+clean_local velero
+kubectl delete namespace vtest
+kubectl delete -n velero deployment.apps/velero
+kubectl delete pvc -n velero pvc-velero
+/devhub/fksdr/cleanup_k8s_pv
+ssh $CEPHA /devhub/fksdr/cleanup_ceph_pv &
+

@@ -1,0 +1,200 @@
+# ==============================================================================================
+#         Update to match test environment, do not change anything else
+
+CEPHA=ceph3-1
+CEPHB=ceph4-1
+PEER=testk8s-1
+
+# ==============================================================================================
+
+echo unique ID: $$
+
+TMPDIR=/devhub/fksdr/tmp/$$
+PVF=pv-$$.yaml
+PVCF=pvc-$$.yaml
+PODF=pod-$$.yaml
+PVC=pvc-$$
+POD=nginx-$$
+SCF=sc-$$.yaml
+BACKUP=vbackup-$$
+
+
+# set up pod with pvc on primary k8s cluster
+setup_primary()
+{
+/devhub/fksdr/install.sh
+/devhub/fksdr/velero.bin.v1 plugin add ljtbbt/velero-plugin-example:v4
+/devhub/fksdr/velero.bin.v1 backup-location create tony-storagelocation --provider example.io/object-store-plugin --bucket velero-pvc --credential cloud-credentials=cloud
+/devhub/fksdr/velero.bin.v1 snapshot-location create tony-snapshotlocation --provider example.io/volume-snapshotter-plugin
+kubectl -n velero exec -ti `kubectl -n velero get pod | grep "^velero" | awk '{print $1}'` -- /bin/bash -c 'rm -rf /velero-pvc/lost+found'
+kubectl -n velero exec -ti `kubectl -n velero get pod | grep "^velero" | awk '{print $1}'` -- /bin/bash -c 'mkdir /velero-pvc/backups'
+kubectl apply -f /devhub/fksdr/pvc-velero.yaml
+
+ssh $PEER /devhub/fksdr/install.sh
+ssh $PEER /devhub/fksdr/velero.bin.v1 plugin add ljtbbt/velero-plugin-example:v4
+ssh $PEER /devhub/fksdr/velero.bin.v1 backup-location create tony-storagelocation --provider example.io/object-store-plugin --bucket velero-pvc --credential cloud-credentials=cloud
+ssh $PEER /devhub/fksdr/velero.bin.v1 snapshot-location create tony-snapshotlocation --provider example.io/volume-snapshotter-plugin
+
+kubectl create namespace vtest
+kubectl -n velero patch deploy velero --patch "$(cat /devhub/fksdr/velero.deploy.json)"
+
+cat >$PVCF <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: $PVC
+  namespace: vtest
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: csi-rbd-sc-ceph-data
+EOF
+
+cat>$PODF <<EOF
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: $POD
+  namespace: vtest
+spec:
+  containers:
+    - name: web-server
+      image: 10.124.48.228:5000/nginx
+      volumeMounts:
+        - name: vol$$
+          mountPath: /var/lib/www/html
+  volumes:
+    - name: vol$$
+      persistentVolumeClaim:
+        claimName: $PVC
+        readOnly: false
+EOF
+
+kubectl apply -f $PVCF
+kubectl apply -f $PODF
+sleep 10
+# TODO: change to state check
+kubectl exec -ti -n vtest $POD -- /bin/bash -c "cp /var/log/*log /var/lib/www/html/"
+}
+
+get_vtest_vol()
+{
+PVID="`kubectl get pv | grep vtest/$PVC | awk '{print $1}'`"
+VOLID="`kubectl get pv $PVID -o yaml | grep "^  *imageName:" | awk '{print $2}'`"
+
+PVID_V="`kubectl get pv | grep velero/ | awk '{print $1}'`"
+kubectl get pv $PVID_V -o yaml > $PVF
+VOLID_V="`grep "^  *imageName:" $PVF | awk '{print $2}'`"
+}
+
+# 2. kick off replication on primary side ceph
+start_replication()
+{
+ssh $CEPHA rbd feature enable data/$VOLID journaling,exclusive-lock
+ssh $CEPHA rbd feature enable data/$VOLID_V journaling,exclusive-lock
+sleep 3
+echo primary site volumes:
+ssh $CEPHA rbd ls data --long
+echo secondary site volumes:
+ssh $CEPHB rbd ls data --long
+
+ssh $CEPHB rbd mirror image resync data/$VOLID
+ssh $CEPHB rbd mirror image resync data/$VOLID_V
+}
+
+start_backup()
+{
+FSIDB="`ssh $CEPHB cat /etc/ceph/ceph.conf | grep fsid | awk '{print $3}'`"
+kubectl annotate pv "$(kubectl -n vtest get pvc | awk '$3 ~/pvc/ { print $3 }')" tony.io/dr-protected-pv="$FSIDB" --overwrite
+/devhub/fksdr/velero.bin.v1 backup create $BACKUP --include-namespaces vtest --storage-location tony-storagelocation --volume-snapshot-locations tony-snapshotlocation
+
+ssh $CEPHB rbd mirror image resync data/$VOLID
+ssh $CEPHB rbd mirror image resync data/$VOLID_V
+
+echo;echo;echo "...... WAITING FOR DATA REPLICATION TO REMOTE SITE .....";echo;echo
+sleep 60
+}
+
+flip_vol()
+{
+ssh $CEPHA rbd mirror image demote data/$1
+sleep 10
+#TODO add state watch rbd mirror image status $VOLID
+ssh $CEPHB rbd mirror image promote data/$1
+ssh $CEPHB rbd feature disable data/$1 journaling
+ssh $CEPHB rbd feature disable data/$1 exclusive-lock
+}
+
+start_failover()
+{
+flip_vol $VOLID
+flip_vol $VOLID_V
+
+echo 
+echo -n "Hit ENTER when you are ready to procced with DR test: "
+read ANSWER
+
+# 4. On secondary k8s cluster, perform following actions:
+#  - create PV based on primary side PV spec
+#  - generate StorageClass with same name on old primary side, but secrect from secondary ceph
+#  - create PVC pointing for the PV
+#  - create pod using this PVC
+
+# =================== prepare new PV file and apply ===================
+cat $PVF | grep -i -v -e time -e "^  *uid" -e "^  *resourceVersion:" | sed -n '/^status/q;p' > new_$PVF
+sed -i "s/operation:.*/operation: Apply/g" new_$PVF
+sed -i "s/^\(  *clusterID:\).*/\1 $FSIDB/g" new_$PVF
+
+# =================== prepare new StorageClass and apply ===================
+SEC_NAME="`cat $PVF | grep nodeStageSecretRef: -A 1 | tail -1 | awk '{print $2}'`"
+FSID_B="`ssh $CEPHB cat /etc/ceph/ceph.conf | grep fsid | awk '{print $3}'`"
+KEY_B="`ssh $CEPHB cat /etc/ceph/ceph.client.admin.keyring | grep key | awk '{print $3}'`"
+
+cat >$SCF <<EOF
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: $SEC_NAME
+  namespace: ceph-csi-rbd
+stringData:
+  userID: admin
+  userKey: $KEY_B
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+   name: csi-rbd-sc-ceph-data
+provisioner: rbd.csi.ceph.com
+parameters:
+   clusterID: $FSID_B
+   pool: data
+   imageFeatures: layering
+   csi.storage.k8s.io/provisioner-secret-name: $SEC_NAME
+   csi.storage.k8s.io/provisioner-secret-namespace: ceph-csi-rbd
+   csi.storage.k8s.io/node-stage-secret-name: $SEC_NAME
+   csi.storage.k8s.io/node-stage-secret-namespace: ceph-csi-rbd
+reclaimPolicy: Retain
+mountOptions:
+   - discard
+EOF
+
+ssh $PEER kubectl delete sc csi-rbd-sc-ceph-data
+ssh $PEER kubectl apply -f $TMPDIR/$SCF
+
+# =================== recreate PVC on peer ===================
+ssh $PEER kubectl apply -f $TMPDIR/new_$PVF
+ssh $PEER kubectl apply -f /devhub/fksdr/pvc-velero.yaml
+ssh $PEER 'kubectl -n velero patch deploy velero --patch "$(cat /devhub/fksdr/velero.deploy.json)"'
+
+# =================== recreate POD on peer ===================
+echo Hit ENTER when ready to restore
+read ANSWER
+
+ssh $PEER /devhub/fksdr/velero.bin.v1 restore create --from-backup $BACKUP
+}
+

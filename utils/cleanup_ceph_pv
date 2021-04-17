@@ -1,0 +1,10 @@
+#!/bin/bash
+
+while [ `rbd ls data --long | grep -c ^csi` -gt 0 ];do
+   for ID in `rbd ls data --long | grep ^csi | awk '{print $1}'`;do
+      echo cleanup $ID
+      rbd mirror image promote $ID
+      rbd rm data/$ID
+      sleep 2
+   done
+done
