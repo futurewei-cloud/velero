@@ -112,7 +112,8 @@ VOLID_V="`grep "^  *imageName:" $PVF | awk '{print $2}'`"
 start_replication()
 {
 kubectl -n velero exec -ti `kubectl -n velero get pod | grep "^velero" | awk '{print $1}'` -- /bin/bash -c 'rm -rf /velero-pvc/lost+found;sync'
-sleep 3
+kubectl -n velero exec -ti `kubectl -n velero get pod | grep "^velero" | awk '{print $1}'` -- /bin/bash -c 'sync'
+sleep 30
 ssh $CEPHA rbd feature enable data/$VOLID journaling,exclusive-lock
 ssh $CEPHA rbd feature enable data/$VOLID_V journaling,exclusive-lock
 sleep 3
@@ -123,6 +124,10 @@ ssh $CEPHB rbd ls data --long
 
 ssh $CEPHB rbd mirror image resync data/$VOLID
 ssh $CEPHB rbd mirror image resync data/$VOLID_V
+
+echo 
+echo;echo;echo "...... WAITING FOR DATA REPLICATION TO REMOTE SITE .....";echo;echo
+sleep 60
 }
 
 start_backup()
@@ -130,12 +135,9 @@ start_backup()
 FSIDB="`ssh $CEPHB cat /etc/ceph/ceph.conf | grep fsid | awk '{print $3}'`"
 kubectl annotate pv "$(kubectl -n vtest get pvc | awk '$3 ~/pvc/ { print $3 }')" tony.io/dr-protected-pv="$FSIDB" --overwrite
 /devhub/fksdr/velero.bin.v1 backup create $BACKUP --include-namespaces vtest --storage-location tony-storagelocation --volume-snapshot-locations tony-snapshotlocation
-
-ssh $CEPHB rbd mirror image resync data/$VOLID
-ssh $CEPHB rbd mirror image resync data/$VOLID_V
-
-echo;echo;echo "...... WAITING FOR DATA REPLICATION TO REMOTE SITE .....";echo;echo
-sleep 60
+kubectl -n velero exec -ti `kubectl -n velero get pod | grep "^velero" | awk '{print $1}'` -- /bin/bash -c 'sync'
+sleep 10
+kubectl -n velero exec -ti `kubectl -n velero get pod | grep "^velero" | awk '{print $1}'` -- /bin/bash -c 'sync'
 }
 
 flip_vol()
