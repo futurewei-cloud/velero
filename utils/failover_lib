@@ -19,6 +19,18 @@ SCF=sc-$$.yaml
 BACKUP=vbackup-$$
 
 
+sanity_check()
+{
+   kubectl get pv
+   kubectl get pvc -A
+   kubectl get pod -n velero
+}
+
+enter_velero()
+{
+kubectl -n velero exec -ti `kubectl -n velero get pod | grep "^velero" | awk '{print $1}'` -- /bin/bash $@
+}
+
 # set up pod with pvc on primary k8s cluster
 setup_primary()
 {
@@ -27,7 +39,7 @@ setup_primary()
 /devhub/fksdr/velero.bin.v1 backup-location create tony-storagelocation --provider example.io/object-store-plugin --bucket velero-pvc --credential cloud-credentials=cloud
 /devhub/fksdr/velero.bin.v1 snapshot-location create tony-snapshotlocation --provider example.io/volume-snapshotter-plugin
 kubectl -n velero exec -ti `kubectl -n velero get pod | grep "^velero" | awk '{print $1}'` -- /bin/bash -c 'rm -rf /velero-pvc/lost+found'
-kubectl -n velero exec -ti `kubectl -n velero get pod | grep "^velero" | awk '{print $1}'` -- /bin/bash -c 'mkdir /velero-pvc/backups'
+kubectl -n velero exec -ti `kubectl -n velero get pod | grep "^velero" | awk '{print $1}'` -- /bin/bash -c 'mkdir -p /velero-pvc/backups'
 kubectl apply -f /devhub/fksdr/pvc-velero.yaml
 
 ssh $PEER /devhub/fksdr/install.sh
@@ -60,13 +72,15 @@ kind: Pod
 metadata:
   name: $POD
   namespace: vtest
+  labels:
+    app: nginx
 spec:
   containers:
     - name: web-server
       image: 10.124.48.228:5000/nginx
       volumeMounts:
         - name: vol$$
-          mountPath: /var/lib/www/html
+          mountPath: /usr/share/nginx/html/
   volumes:
     - name: vol$$
       persistentVolumeClaim:
@@ -76,9 +90,12 @@ EOF
 
 kubectl apply -f $PVCF
 kubectl apply -f $PODF
-sleep 10
+
+watch kubectl -n vtest get pod
 # TODO: change to state check
-kubectl exec -ti -n vtest $POD -- /bin/bash -c "cp /var/log/*log /var/lib/www/html/"
+kubectl exec -ti -n vtest $POD -- /bin/bash -c "cp /var/log/*log /usr/share/nginx/html/"
+kubectl exec -ti -n vtest $POD -- /bin/bash -c 'echo "<html>hello</html>" > /usr/share/nginx/html/index.html'
+kubectl apply -f /devhub/fksdr/nodeport.yaml
 }
 
 get_vtest_vol()
@@ -94,6 +111,8 @@ VOLID_V="`grep "^  *imageName:" $PVF | awk '{print $2}'`"
 # 2. kick off replication on primary side ceph
 start_replication()
 {
+kubectl -n velero exec -ti `kubectl -n velero get pod | grep "^velero" | awk '{print $1}'` -- /bin/bash -c 'rm -rf /velero-pvc/lost+found;sync'
+sleep 3
 ssh $CEPHA rbd feature enable data/$VOLID journaling,exclusive-lock
 ssh $CEPHA rbd feature enable data/$VOLID_V journaling,exclusive-lock
 sleep 3
