@@ -18,8 +18,8 @@ watch kubectl get pod -n velero
 get_vtest_vol
 
 # 2. kick off replication on primary side ceph
-start_replication
 start_backup
+start_replication
 echo
 echo Hit ENTER when ready to failover
 read ANSWER

@@ -35,17 +35,17 @@ kubectl -n velero exec -ti `kubectl -n velero get pod | grep "^velero" | awk '{p
 setup_primary()
 {
 /devhub/fksdr/install.sh
-/devhub/fksdr/velero.bin.v1 plugin add ljtbbt/velero-plugin-example:v4
-/devhub/fksdr/velero.bin.v1 backup-location create tony-storagelocation --provider example.io/object-store-plugin --bucket velero-pvc --credential cloud-credentials=cloud
-/devhub/fksdr/velero.bin.v1 snapshot-location create tony-snapshotlocation --provider example.io/volume-snapshotter-plugin
-kubectl -n velero exec -ti `kubectl -n velero get pod | grep "^velero" | awk '{print $1}'` -- /bin/bash -c 'rm -rf /velero-pvc/lost+found'
+/devhub/fksdr/velero.bin.v2 plugin add ljtbbt/fksdr-plugin:v1
+/devhub/fksdr/velero.bin.v2 backup-location create tony-storagelocation --provider example.io/object-store-plugin --bucket velero-pvc --credential cloud-credentials=cloud
+/devhub/fksdr/velero.bin.v2 snapshot-location create tony-snapshotlocation --provider example.io/volume-snapshotter-plugin
+#kubectl -n velero exec -ti `kubectl -n velero get pod | grep "^velero" | awk '{print $1}'` -- /bin/bash -c 'rm -rf /velero-pvc/lost+found'
 kubectl -n velero exec -ti `kubectl -n velero get pod | grep "^velero" | awk '{print $1}'` -- /bin/bash -c 'mkdir -p /velero-pvc/backups'
 kubectl apply -f /devhub/fksdr/pvc-velero.yaml
 
 ssh $PEER /devhub/fksdr/install.sh
-ssh $PEER /devhub/fksdr/velero.bin.v1 plugin add ljtbbt/velero-plugin-example:v4
-ssh $PEER /devhub/fksdr/velero.bin.v1 backup-location create tony-storagelocation --provider example.io/object-store-plugin --bucket velero-pvc --credential cloud-credentials=cloud
-ssh $PEER /devhub/fksdr/velero.bin.v1 snapshot-location create tony-snapshotlocation --provider example.io/volume-snapshotter-plugin
+ssh $PEER /devhub/fksdr/velero.bin.v2 plugin add ljtbbt/fksdr-plugin:v1
+ssh $PEER /devhub/fksdr/velero.bin.v2 backup-location create tony-storagelocation --provider example.io/object-store-plugin --bucket velero-pvc --credential cloud-credentials=cloud
+ssh $PEER /devhub/fksdr/velero.bin.v2 snapshot-location create tony-snapshotlocation --provider example.io/volume-snapshotter-plugin
 
 kubectl create namespace vtest
 kubectl -n velero patch deploy velero --patch "$(cat /devhub/fksdr/velero.deploy.json)"
@@ -94,7 +94,13 @@ kubectl apply -f $PODF
 watch kubectl -n vtest get pod
 # TODO: change to state check
 kubectl exec -ti -n vtest $POD -- /bin/bash -c "cp /var/log/*log /usr/share/nginx/html/"
-kubectl exec -ti -n vtest $POD -- /bin/bash -c 'echo "<html>hello</html>" > /usr/share/nginx/html/index.html'
+
+echo "<html>" > /tmp/index.html
+echo "System log:<BR><BR><pre>" >> /tmp/index.html
+tail -20 /var/log/syslog >> /tmp/index.html
+echo "</pre></html>" >> /tmp/index.html
+kubectl -n vtest cp /tmp/index.html $POD:/usr/share/nginx/html/
+#kubectl exec -ti -n vtest $POD -- /bin/bash -c 'echo "<html>hello</html>" > /usr/share/nginx/html/index.html'
 kubectl apply -f /devhub/fksdr/nodeport.yaml
 }
 
@@ -111,7 +117,7 @@ VOLID_V="`grep "^  *imageName:" $PVF | awk '{print $2}'`"
 # 2. kick off replication on primary side ceph
 start_replication()
 {
-kubectl -n velero exec -ti `kubectl -n velero get pod | grep "^velero" | awk '{print $1}'` -- /bin/bash -c 'rm -rf /velero-pvc/lost+found;sync'
+#kubectl -n velero exec -ti `kubectl -n velero get pod | grep "^velero" | awk '{print $1}'` -- /bin/bash -c 'rm -rf /velero-pvc/lost+found;sync'
 kubectl -n velero exec -ti `kubectl -n velero get pod | grep "^velero" | awk '{print $1}'` -- /bin/bash -c 'sync'
 sleep 30
 ssh $CEPHA rbd feature enable data/$VOLID journaling,exclusive-lock
@@ -134,7 +140,7 @@ start_backup()
 {
 FSIDB="`ssh $CEPHB cat /etc/ceph/ceph.conf | grep fsid | awk '{print $3}'`"
 kubectl annotate pv "$(kubectl -n vtest get pvc | awk '$3 ~/pvc/ { print $3 }')" tony.io/dr-protected-pv="$FSIDB" --overwrite
-/devhub/fksdr/velero.bin.v1 backup create $BACKUP --include-namespaces vtest --storage-location tony-storagelocation --volume-snapshot-locations tony-snapshotlocation
+/devhub/fksdr/velero.bin.v2 backup create $BACKUP --include-namespaces vtest --storage-location tony-storagelocation --volume-snapshot-locations tony-snapshotlocation
 kubectl -n velero exec -ti `kubectl -n velero get pod | grep "^velero" | awk '{print $1}'` -- /bin/bash -c 'sync'
 sleep 10
 kubectl -n velero exec -ti `kubectl -n velero get pod | grep "^velero" | awk '{print $1}'` -- /bin/bash -c 'sync'
@@ -213,9 +219,8 @@ ssh $PEER kubectl apply -f /devhub/fksdr/pvc-velero.yaml
 ssh $PEER 'kubectl -n velero patch deploy velero --patch "$(cat /devhub/fksdr/velero.deploy.json)"'
 
 # =================== recreate POD on peer ===================
-echo Hit ENTER when ready to restore
-read ANSWER
+watch ssh $PEER kubectl -n velero get pod
 
-ssh $PEER /devhub/fksdr/velero.bin.v1 restore create --from-backup $BACKUP
+ssh $PEER /devhub/fksdr/velero.bin.v2 restore create --from-backup $BACKUP
 }
 
