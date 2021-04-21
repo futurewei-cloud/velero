@@ -18,7 +18,7 @@ echo
 
 # 1
 update_primary
-start_rep 
+#start_rep 
 pred "waiting replication to be complete ..."
 sleep 20
 

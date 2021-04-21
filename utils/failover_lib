@@ -12,9 +12,9 @@ BASE=/devhub/fksdr/dorado_poc
 # ==============================================================================================
 
 # High level steps:
-# 1. Establish replication, wait for data to be mirrored
-# 2. Install velero on peer 
-# 3. Split mirror and mount velero PVC
+# 1. Update app data, establish replication, wait for data to be mirrored
+# 2. Split mirror and mount velero PVC
+# 3. Reload velero on peer and load backup data
 # 4. Restore
 #
 
