@@ -5,28 +5,28 @@
 
 . failover_lib
 
-mkdir -p $TMPDIR
-pushd $TMPDIR
-
 echo Test set up unique ID: $$
 echo All generated k8s config files can be found in $TMPDIR
 echo
 
-setup_primary
-watch kubectl get pod -n velero
+# High level steps:
+# 1. Establish replication, wait for data to be mirrored
+# 2. Split mirror and mount velero PVC
+# 3. Install velero on peer
+# 4. Restore
+#
 
-get_vtest_vol
+# 1
+update_primary
+start_rep 
+pred "waiting replication to be complete ..."
+sleep 20
 
-# 2. kick off replication on primary side ceph
-start_backup
-start_replication
-echo
-echo Hit ENTER when ready to failover
-read ANSWER
+# 2
+stop_rep
 
+# 3 
+prepare_remote
 
-# ==============================================================================================
-#                               Failover starts from here
-# ==============================================================================================
-
-start_failover
+# 4
+restore
