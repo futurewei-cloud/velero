@@ -1,0 +1,11 @@
+#!/bin/bash
+
+#set -e
+#set -x
+
+. dr_lib
+
+update_primary
+start_rep 
+pred "waiting replication to be complete ..."
+sleep 20

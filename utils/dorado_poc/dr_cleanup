@@ -1,0 +1,13 @@
+#!/bin/bash
+
+. dr_lib
+
+PVID="`ssh $PEER kubectl get pv | grep vtest/ | awk '{print $1}'`"
+ssh $PEER kubectl delete namespace vtest
+ssh $PEER kubectl delete pv $PVID
+
+#for BACKUP in `./velero backup get | grep vbackup | awk '{print $1}'`;do echo cleanup: $BACKUP;kubectl -n velero delete backup $BACKUP;done
+#ssh $PEER "for BACKUP in `./velero backup get | grep vbackup | awk '{print $1}'`;do echo cleanup: $BACKUP;kubectl -n velero delete backup $BACKUP;done"
+
+start_rep
+
