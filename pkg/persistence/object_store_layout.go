@@ -68,7 +68,7 @@ func (l *ObjectStoreLayout) getRestoreDir(restore string) string {
 	return path.Join(l.subdirs["restores"], restore) + "/"
 }
 
-func (l *ObjectStoreLayout) getBackupMetadataKey(backup string) string {
+func (l *ObjectStoreLayout)  getBackupMetadataKey(backup string) string {
 	return path.Join(l.subdirs["backups"], backup, "velero-backup.json")
 }
 

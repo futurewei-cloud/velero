@@ -958,7 +958,7 @@ func (ctx *restoreContext) restoreItem(obj *unstructured.Unstructured, groupReso
 			// return early because we don't want to restore the PV itself, we want to dynamically re-provision it.
 			return warnings, errs
 
-		case hasDeleteReclaimPolicy(obj.Object):
+		case hasDeleteReclaimPolicy(obj.Object) && !hasDrAnnotation(obj):
 			ctx.log.Infof("Dynamically re-provisioning persistent volume because it doesn't have a snapshot and its reclaim policy is Delete.")
 			ctx.pvsToProvision.Insert(name)
 
@@ -1371,6 +1371,14 @@ func hasResticBackup(unstructuredPV *unstructured.Unstructured, ctx *restoreCont
 func hasDeleteReclaimPolicy(obj map[string]interface{}) bool {
 	policy, _, _ := unstructured.NestedString(obj, "spec", "persistentVolumeReclaimPolicy")
 	return policy == string(v1.PersistentVolumeReclaimDelete)
+}
+
+func hasDrAnnotation(obj *unstructured.Unstructured) bool {
+
+	annotations := obj.GetAnnotations()
+	_, ok := annotations["tony.io/dr-protected-pv"]
+
+	return ok
 }
 
 // resetVolumeBindingInfo clears any necessary metadata out of a PersistentVolume or PersistentVolumeClaim that would make it ineligible to be re-bound by Velero.

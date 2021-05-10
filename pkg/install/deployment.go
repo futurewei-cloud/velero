@@ -151,6 +151,9 @@ func Deployment(namespace string, opts ...podTemplateOption) *appsv1.Deployment 
 		},
 		Spec: appsv1.DeploymentSpec{
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"deploy": "velero"}},
+			Strategy: appsv1.DeploymentStrategy{
+				Type: appsv1.RecreateDeploymentStrategyType,
+			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels:      containerLabels,
@@ -166,13 +169,14 @@ func Deployment(namespace string, opts ...podTemplateOption) *appsv1.Deployment 
 							Ports:           containerPorts(),
 							ImagePullPolicy: pullPolicy,
 							Command: []string{
-								"/bin/bash",
+								//"/bin/bash",
+								"/velero",
 							},
-							Args: []string{
-								"-c",
-								"while true; do echo hello; sleep 10;done",
-							},
-							//Args: args,
+							//Args: []string{
+							//"-c",
+							//"while true; do echo hello; sleep 10;done",
+							//},
+							Args: args,
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "plugins",
