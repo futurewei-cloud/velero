@@ -1,6 +1,0 @@
-#!/bin/bash
-
-. drlib
-
-stop_rep
-prepare_remote
